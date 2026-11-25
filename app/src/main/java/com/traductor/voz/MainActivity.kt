@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -13,30 +14,35 @@ import android.widget.*
 class MainActivity : Activity() {
     private lateinit var btn: Button
     private lateinit var status: TextView
-    // idioma de traducción, nombre del modelo de voz, texto
-    private val langs = listOf(
-        Triple("ja", "vosk-model-small-ja-0.22", "Japonés"),
-        Triple("en", "vosk-model-small-en-us-0.15", "Inglés")
-    )
-    private var sel = 0
+    private val langs = listOf("en" to "Subtítulos en inglés", "pt" to "Subtítulos en portugués",
+        "fr" to "Subtítulos en francés", "it" to "Subtítulos en italiano", "de" to "Subtítulos en alemán")
+    private val zones = listOf("Zona: automática", "Zona: horizontal (pantalla completa)",
+        "Zona: vertical (video arriba)", "Zona: toda la pantalla")
+    private var selLang = 0
+    private var selZone = 0
+
+    private fun spinner(items: List<String>, onSel: (Int) -> Unit) = Spinner(this).apply {
+        adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items)
+        onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { onSel(pos) }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 60, 40, 40) }
-        root.addView(TextView(this).apply { text = "Traductor de Voz v3"; textSize = 24f })
+        root.addView(TextView(this).apply { text = "Traductor de Subtítulos v4"; textSize = 24f })
         root.addView(TextView(this).apply {
-            text = "Elige el idioma y toca Empezar. La primera vez descarga un modelo de voz (unos 50 MB), con internet. Después ya no lo necesita."
+            text = "1. Toca Empezar y acepta compartir TODA la pantalla.\n" +
+                "2. Abre Crunchyroll, activa los subtítulos en inglés y ponlo en pantalla completa (horizontal).\n" +
+                "3. La app lee cada subtítulo y te lo dice en español."
             setPadding(0, 20, 0, 20)
         })
-        val spin = Spinner(this)
-        spin.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, langs.map { it.third })
-        spin.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { sel = pos }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
-        root.addView(spin)
+        root.addView(spinner(langs.map { it.second }) { selLang = it })
+        root.addView(spinner(zones) { selZone = it })
         btn = Button(this)
-        btn.setOnClickListener { if (TranslatorService.running) stopService() else start() }
+        btn.setOnClickListener { if (TranslatorService.running) stopSvc() else start() }
         root.addView(btn)
         status = TextView(this).apply { setPadding(0, 20, 0, 20); textSize = 16f; typeface = Typeface.MONOSPACE }
         root.addView(ScrollView(this).apply { addView(status) })
@@ -58,29 +64,41 @@ class MainActivity : Activity() {
     private fun refresh() { btn.text = if (TranslatorService.running) "Detener" else "Empezar" }
 
     private fun start() {
-        val need = mutableListOf<String>()
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
-            need.add(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            need.add(Manifest.permission.POST_NOTIFICATIONS)
-        if (need.isNotEmpty()) { requestPermissions(need.toTypedArray(), 1); return }
-        val l = langs[sel]
-        startForegroundService(Intent(this, TranslatorService::class.java)
-            .putExtra(TranslatorService.EXTRA_SRC, l.first)
-            .putExtra(TranslatorService.EXTRA_MODEL, l.second))
-        TranslatorService.running = true
-        refresh()
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1); return
+        }
+        launchCapture()
     }
 
-    private fun stopService() {
-        stopService(Intent(this, TranslatorService::class.java))
-        refresh()
+    private fun launchCapture() {
+        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        startActivityForResult(mgr.createScreenCaptureIntent(), 20)
     }
 
     override fun onRequestPermissionsResult(c: Int, p: Array<out String>, r: IntArray) {
         super.onRequestPermissionsResult(c, p, r)
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) start()
-        else Toast.makeText(this, "Necesito el permiso del micrófono", Toast.LENGTH_LONG).show()
+        launchCapture()
+    }
+
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        if (req != 20) return
+        if (res == RESULT_OK && data != null) {
+            startForegroundService(Intent(this, TranslatorService::class.java)
+                .putExtra(TranslatorService.EXTRA_CODE, res)
+                .putExtra(TranslatorService.EXTRA_DATA, data)
+                .putExtra(TranslatorService.EXTRA_SRC, langs[selLang].first)
+                .putExtra(TranslatorService.EXTRA_ZONE, selZone))
+            TranslatorService.running = true
+            refresh()
+        } else {
+            Toast.makeText(this, "Necesito el permiso para capturar la pantalla", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun stopSvc() {
+        stopService(Intent(this, TranslatorService::class.java))
+        refresh()
     }
 }

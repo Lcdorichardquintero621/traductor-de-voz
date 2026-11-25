@@ -13,20 +13,19 @@ import android.widget.*
 class MainActivity : Activity() {
     private lateinit var btn: Button
     private lateinit var status: TextView
+    // idioma de traducción, nombre del modelo de voz, texto
     private val langs = listOf(
-        Triple("ja", "ja-JP", "Japonés"), Triple("en", "en-US", "Inglés"),
-        Triple("ko", "ko-KR", "Coreano"), Triple("zh", "zh-CN", "Chino"),
-        Triple("fr", "fr-FR", "Francés"), Triple("pt", "pt-BR", "Portugués"),
-        Triple("it", "it-IT", "Italiano"), Triple("de", "de-DE", "Alemán")
+        Triple("ja", "vosk-model-small-ja-0.22", "Japonés"),
+        Triple("en", "vosk-model-small-en-us-0.15", "Inglés")
     )
     private var sel = 0
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 60, 40, 40) }
-        root.addView(TextView(this).apply { text = "Traductor de Voz (diagnóstico)"; textSize = 24f })
+        root.addView(TextView(this).apply { text = "Traductor de Voz v3"; textSize = 24f })
         root.addView(TextView(this).apply {
-            text = "Elige el idioma, toca Empezar y deja esta pantalla abierta mientras suena el video cerca del micrófono."
+            text = "Elige el idioma y toca Empezar. La primera vez descarga un modelo de voz (unos 50 MB), con internet. Después ya no lo necesita."
             setPadding(0, 20, 0, 20)
         })
         val spin = Spinner(this)
@@ -69,7 +68,7 @@ class MainActivity : Activity() {
         val l = langs[sel]
         startForegroundService(Intent(this, TranslatorService::class.java)
             .putExtra(TranslatorService.EXTRA_SRC, l.first)
-            .putExtra(TranslatorService.EXTRA_TAG, l.second))
+            .putExtra(TranslatorService.EXTRA_MODEL, l.second))
         TranslatorService.running = true
         refresh()
     }

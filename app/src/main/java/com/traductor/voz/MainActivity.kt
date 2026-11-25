@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -12,7 +13,6 @@ import android.widget.*
 class MainActivity : Activity() {
     private lateinit var btn: Button
     private lateinit var status: TextView
-    private lateinit var last: TextView
     private val langs = listOf(
         Triple("ja", "ja-JP", "Japonés"), Triple("en", "en-US", "Inglés"),
         Triple("ko", "ko-KR", "Coreano"), Triple("zh", "zh-CN", "Chino"),
@@ -24,9 +24,9 @@ class MainActivity : Activity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 60, 40, 40) }
-        root.addView(TextView(this).apply { text = "Traductor de Voz"; textSize = 26f })
+        root.addView(TextView(this).apply { text = "Traductor de Voz (diagnóstico)"; textSize = 24f })
         root.addView(TextView(this).apply {
-            text = "1. Elige el idioma del video.\n2. Toca Empezar.\n3. Abre Crunchyroll (o lo que quieras ver) y ponte audífonos con cable. Deja el volumen original bajito."
+            text = "Elige el idioma, toca Empezar y deja esta pantalla abierta mientras suena el video cerca del micrófono."
             setPadding(0, 20, 0, 20)
         })
         val spin = Spinner(this)
@@ -39,23 +39,21 @@ class MainActivity : Activity() {
         btn = Button(this)
         btn.setOnClickListener { if (TranslatorService.running) stopService() else start() }
         root.addView(btn)
-        status = TextView(this).apply { setPadding(0, 20, 0, 20) }
-        last = TextView(this).apply { textSize = 18f }
-        root.addView(status); root.addView(last)
+        status = TextView(this).apply { setPadding(0, 20, 0, 20); textSize = 16f; typeface = Typeface.MONOSPACE }
+        root.addView(ScrollView(this).apply { addView(status) })
         setContentView(root)
     }
 
     override fun onResume() {
         super.onResume()
         TranslatorService.onStatus = { status.text = it; refresh() }
-        TranslatorService.onText = { last.text = it }
+        status.text = TranslatorService.lastReport
         refresh()
     }
 
     override fun onPause() {
         super.onPause()
         TranslatorService.onStatus = null
-        TranslatorService.onText = null
     }
 
     private fun refresh() { btn.text = if (TranslatorService.running) "Detener" else "Empezar" }

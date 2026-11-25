@@ -21,7 +21,7 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         const val EXTRA_SRC = "src"
         const val EXTRA_TAG = "tag"
         @Volatile var running = false
-        var onText: ((String) -> Unit)? = null
+        @Volatile var lastReport = "Sin iniciar"
         var onStatus: ((String) -> Unit)? = null
     }
 
@@ -35,17 +35,53 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
     private var pending = 0
     private var active = false
 
+    // Datos del panel de diagnóstico
+    private var state = "Iniciando..."
+    private var level = 0f
+    private var errCount = 0
+    private var lastErr = "ninguno"
+    private var heard = "-"
+    private var spoken = "-"
+    private var voiceInfo = "iniciando..."
+    private var lastPublish = 0L
+
+    private fun errName(e: Int) = when (e) {
+        1 -> "red lenta"; 2 -> "sin red"; 3 -> "error de audio"; 4 -> "error del servidor"
+        5 -> "error del cliente"; 6 -> "no oyó hablar"; 7 -> "no entendió nada"
+        8 -> "reconocedor ocupado"; 9 -> "FALTA PERMISO"; 10 -> "demasiadas peticiones"
+        11 -> "servidor desconectado"; 12 -> "idioma no soportado"; 13 -> "idioma no disponible"
+        else -> "otro"
+    }
+
+    private fun publish(force: Boolean = false) {
+        val now = SystemClock.uptimeMillis()
+        if (!force && now - lastPublish < 250) return
+        lastPublish = now
+        val n = ((level + 2f) / 12f * 10f).toInt().coerceIn(0, 10)
+        val bar = "█".repeat(n) + "░".repeat(10 - n)
+        lastReport = "Estado: $state\nMicrófono: $bar\nErrores: $errCount (último: $lastErr)\n" +
+            "Voz en español: $voiceInfo\nOí: $heard\nTraducción: $spoken"
+        onStatus?.invoke(lastReport)
+    }
+
     override fun onBind(i: Intent?): IBinder? = null
 
     override fun onInit(s: Int) {
-        tts?.language = Locale("es")
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String?) {}
-            override fun onDone(id: String?) { h.post { pending = maxOf(0, pending - 1); updateRate() } }
-            @Deprecated("Deprecated in Java")
-            override fun onError(id: String?) { h.post { pending = maxOf(0, pending - 1); updateRate() } }
-        })
-        ttsReady = true
+        val r = tts?.setLanguage(Locale("es"))
+        if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED || r == null) {
+            voiceInfo = "NO HAY voz en español en el teléfono"
+        } else {
+            voiceInfo = "OK"
+            ttsReady = true
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(id: String?) {}
+                override fun onDone(id: String?) { h.post { pending = maxOf(0, pending - 1); updateRate() } }
+                @Deprecated("Deprecated in Java")
+                override fun onError(id: String?) { h.post { pending = maxOf(0, pending - 1); updateRate() } }
+            })
+            speak("Traductor listo")
+        }
+        publish(true)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -53,16 +89,18 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         cleanup()
         src = intent?.getStringExtra(EXTRA_SRC) ?: "ja"
         tag = intent?.getStringExtra(EXTRA_TAG) ?: "ja-JP"
+        errCount = 0; lastErr = "ninguno"; heard = "-"; spoken = "-"; voiceInfo = "iniciando..."
         startAsForeground()
         running = true
         tts = TextToSpeech(this, this)
         translator = Translation.getClient(
             TranslatorOptions.Builder().setSourceLanguage(src).setTargetLanguage(TranslateLanguage.SPANISH).build()
         )
-        onStatus?.invoke("Preparando idioma (la primera vez necesita internet)...")
+        state = "Descargando idioma (necesita internet la primera vez)..."
+        publish(true)
         translator!!.downloadModelIfNeeded()
-            .addOnSuccessListener { active = true; onStatus?.invoke("Escuchando..."); listen() }
-            .addOnFailureListener { onStatus?.invoke("No se pudo bajar el idioma. Revisa tu internet."); stopSelf() }
+            .addOnSuccessListener { active = true; state = "Escuchando..."; publish(true); listen() }
+            .addOnFailureListener { state = "No se pudo bajar el idioma: ${it.message}"; publish(true) }
         return START_NOT_STICKY
     }
 
@@ -85,21 +123,27 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
     private fun listen() {
         if (!active) return
         recognizer?.destroy()
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            state = "Este teléfono NO tiene reconocimiento de voz (instala/activa la app Google)"
+            publish(true); return
+        }
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onResults(r: Bundle) {
-                    r.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { translate(it) }
+                    val t = r.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                    if (t != null) { heard = t; publish(true); translate(t) }
                     h.postDelayed({ listen() }, 50)
                 }
                 override fun onError(e: Int) {
-                    val wait = if (e == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 800L else 150L
+                    errCount++; lastErr = "$e ${errName(e)}"; publish(true)
+                    val wait = when (e) { 8, 5, 9, 10 -> 1000L; else -> 150L }
                     h.postDelayed({ listen() }, wait)
                 }
-                override fun onReadyForSpeech(p: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(v: Float) {}
+                override fun onReadyForSpeech(p: Bundle?) { state = "Escuchando..."; publish() }
+                override fun onBeginningOfSpeech() { state = "Oyendo voz..."; publish() }
+                override fun onRmsChanged(v: Float) { level = v; publish() }
                 override fun onBufferReceived(b: ByteArray?) {}
-                override fun onEndOfSpeech() {}
+                override fun onEndOfSpeech() { state = "Procesando..."; publish() }
                 override fun onPartialResults(p: Bundle?) {}
                 override fun onEvent(t: Int, p: Bundle?) {}
             })
@@ -111,10 +155,9 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun translate(text: String) {
-        translator?.translate(text)?.addOnSuccessListener { es ->
-            onText?.invoke(es)
-            speak(es)
-        }
+        translator?.translate(text)
+            ?.addOnSuccessListener { es -> spoken = es; publish(true); speak(es) }
+            ?.addOnFailureListener { spoken = "ERROR al traducir: ${it.message}"; publish(true) }
     }
 
     private fun speak(es: String) {
@@ -125,7 +168,6 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         tts?.speak(es, TextToSpeech.QUEUE_ADD, null, "u" + System.nanoTime())
     }
 
-    // Si se acumulan frases, habla más rápido para no atrasarse
     private fun updateRate() { tts?.setSpeechRate((1.0f + 0.15f * pending).coerceAtMost(1.6f)) }
 
     private fun cleanup() {
@@ -140,7 +182,8 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         cleanup()
         running = false
-        onStatus?.invoke("Detenido")
+        lastReport = "Detenido"
+        onStatus?.invoke(lastReport)
         super.onDestroy()
     }
 }

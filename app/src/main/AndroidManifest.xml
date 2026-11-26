@@ -5,8 +5,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
-        android:label="Traductor de Subtítulos"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:icon="@mipmap/ic_launcher"
+        android:label="Traductor de Película"
+        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

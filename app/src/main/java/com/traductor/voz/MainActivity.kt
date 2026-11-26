@@ -18,6 +18,9 @@ class MainActivity : Activity() {
         "fr" to "Subtítulos en francés", "it" to "Subtítulos en italiano", "de" to "Subtítulos en alemán")
     private val zones = listOf("Zona: automática", "Zona: horizontal (pantalla completa)",
         "Zona: vertical (video arriba)", "Zona: toda la pantalla")
+    private val audios = listOf("Audio: bajar el volumen del anime mientras habla (recomendado)",
+        "Audio: voz por el volumen de alarma (independiente)", "Audio: sin cambios")
+    private var selAudio = 0
     private var selLang = 0
     private var selZone = 0
 
@@ -41,6 +44,7 @@ class MainActivity : Activity() {
         })
         root.addView(spinner(langs.map { it.second }) { selLang = it })
         root.addView(spinner(zones) { selZone = it })
+        root.addView(spinner(audios) { selAudio = it })
         btn = Button(this)
         btn.setOnClickListener { if (TranslatorService.running) stopSvc() else start() }
         root.addView(btn)
@@ -89,7 +93,8 @@ class MainActivity : Activity() {
                 .putExtra(TranslatorService.EXTRA_CODE, res)
                 .putExtra(TranslatorService.EXTRA_DATA, data)
                 .putExtra(TranslatorService.EXTRA_SRC, langs[selLang].first)
-                .putExtra(TranslatorService.EXTRA_ZONE, selZone))
+                .putExtra(TranslatorService.EXTRA_ZONE, selZone)
+                .putExtra(TranslatorService.EXTRA_AUDIO, selAudio))
             TranslatorService.running = true
             refresh()
         } else {

@@ -8,6 +8,9 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
@@ -34,6 +37,7 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         const val EXTRA_DATA = "data"
         const val EXTRA_SRC = "src"
         const val EXTRA_ZONE = "zone"
+        const val EXTRA_AUDIO = "audio"
         @Volatile var running = false
         @Volatile var lastReport = "Sin iniciar"
         var onStatus: ((String) -> Unit)? = null
@@ -55,6 +59,10 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
     private var src = "en"
     private var zone = 0
     private var pending = 0
+    private var audioMode = 0
+    private var am: AudioManager? = null
+    private var focusReq: AudioFocusRequest? = null
+    private var hasFocus = false
     @Volatile private var alive = false
     @Volatile private var ready = false
     @Volatile private var busy = false
@@ -90,11 +98,16 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         } else {
             voiceInfo = "OK"
             ttsReady = true
+            if (audioMode != 2) {
+                val usage = if (audioMode == 1) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+                tts?.setAudioAttributes(AudioAttributes.Builder().setUsage(usage)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            }
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(id: String?) {}
-                override fun onDone(id: String?) { h.post { pending = maxOf(0, pending - 1); updateRate() } }
+                override fun onDone(id: String?) { h.post { utteranceEnded() } }
                 @Deprecated("Deprecated in Java")
-                override fun onError(id: String?) { h.post { pending = maxOf(0, pending - 1); updateRate() } }
+                override fun onError(id: String?) { h.post { utteranceEnded() } }
             })
             speak("Traductor listo")
         }
@@ -111,6 +124,8 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         cleanup()
         src = intent?.getStringExtra(EXTRA_SRC) ?: "en"
         zone = intent?.getIntExtra(EXTRA_ZONE, 0) ?: 0
+        audioMode = intent?.getIntExtra(EXTRA_AUDIO, 0) ?: 0
+        am = getSystemService(AudioManager::class.java)
         read = "-"; spoken = "-"; voiceInfo = "iniciando..."; screenInfo = "-"
         lastCand = ""; lastSpoken = ""; stable = 0; emptyCount = 0
         startAsForeground()
@@ -285,7 +300,30 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         if (pending > 2) { tts?.stop(); pending = 0 }
         pending++
         updateRate()
+        requestDuck()
         tts?.speak(es, TextToSpeech.QUEUE_ADD, null, "u" + System.nanoTime())
+    }
+
+    private fun utteranceEnded() {
+        pending = maxOf(0, pending - 1); updateRate()
+        if (pending == 0) h.postDelayed({ if (pending == 0) releaseDuck() }, 500)
+    }
+
+    // Pide a Android que baje el volumen del anime mientras habla la traducción
+    private fun requestDuck() {
+        if (audioMode != 0 || hasFocus) return
+        val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(attrs).setWillPauseWhenDucked(false).setOnAudioFocusChangeListener { }.build()
+        focusReq = req
+        hasFocus = am?.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun releaseDuck() {
+        if (!hasFocus) return
+        focusReq?.let { am?.abandonAudioFocusRequest(it) }
+        hasFocus = false
     }
 
     private fun updateRate() { tts?.setSpeechRate((1.0f + 0.15f * pending).coerceAtMost(1.6f)) }
@@ -301,6 +339,7 @@ class TranslatorService : Service(), TextToSpeech.OnInitListener {
         projection?.stop(); projection = null; projCb = null
         ocr?.close(); ocr = null
         translator?.close(); translator = null
+        releaseDuck()
         tts?.shutdown(); tts = null
         ttsReady = false; pending = 0
     }
